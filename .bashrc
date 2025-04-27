@@ -1,0 +1,4 @@
+export BEDROCK_AGENT_ID=IPLJ4OHDHA
+export BEDROCK_AGENT_ALIAS_ID=VVKDMRGDVF
+# 如果需要指定區域
+# export AWS_DEFAULT_REGION="您Agent所在的區域"

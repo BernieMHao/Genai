@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>東森購物客服 - 語音互動 (Polly)</title> <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f7f6;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        #chat-container {
+            width: 100%;
+            max-width: 700px;
+            background-color: #fff;
+            border-radius: 12px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-top: 0;
+            padding: 20px;
+            background-color: #e9eff2;
+            border-bottom: 1px solid #cfd8dc;
+            font-size: 1.8em;
+        }
+
+        #controls {
+            padding: 15px 20px;
+            background-color: #f0f0f0;
+            border-bottom: 1px solid #ccc;
+            text-align: center; /* 讓按鈕居中 */
+        }
+
+        #voice-button {
+            padding: 12px 25px;
+            font-size: 1.1em;
+            color: white;
+            border: none;
+            border-radius: 25px; /* 更圓潤的按鈕 */
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            background-color: #dc3545; /* 初始顏色：紅色（未錄音） */
+            display: inline-flex; /* 允許圖標和文字並排 */
+            align-items: center;
+            gap: 8px; /* 圖標和文字之間的間距 */
+        }
+
+        #voice-button:hover {
+            opacity: 0.9;
+        }
+
+        #voice-button:active {
+             transform: scale(0.98); /* 點擊時略微縮小 */
+        }
+
+        #voice-button.recording {
+            background-color: #28a745; /* 錄音中顏色：綠色 */
+        }
+
+        #chat-area {
+            height: 450px; /* 加高聊天區域 */
+            overflow-y: auto; /* 允許滾動 */
+            padding: 15px 20px;
+            flex-grow: 1; /* 讓聊天區域填充剩餘空間 */
+            display: flex;
+            flex-direction: column; /* 訊息垂直排列 */
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            max-width: 85%; /* 限制訊息寬度 */
+            word-wrap: break-word; /* 自動換行 */
+            line-height: 1.5;
+            opacity: 0; /* 初始隱藏 */
+            animation: fadeIn 0.5s forwards; /* 淡入動畫 */
+        }
+
+        .message:nth-child(n) { /* 給不同訊息加延遲，讓它們陸續出現 */
+             animation-delay: calc(var(--animation-order, 0) * 0.1s);
+        }
+
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+
+
+        .user-message {
+            align-self: flex-end; /* 靠右對齊 */
+            background-color: #dcf8c6; /* 綠色背景 */
+        }
+
+        .agent-message {
+            align-self: flex-start; /* 靠左對齊 */
+            background-color: #e9e9eb; /* 淺灰背景 */
+        }
+
+         .info-text {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.9em;
+            color: #666;
+            padding: 0 20px;
+        }
+
+         #status-message {
+            text-align: center;
+            color: #555;
+            font-size: 0.9em;
+            margin-top: 10px;
+            min-height: 1.2em; /* 保持高度穩定 */
+         }
+
+    </style>
+</head>
+<body>
+
+    <div id="chat-container">
+        <h1>東森購物客服</h1> <div id="controls">
+             <button id="voice-button">點擊說話</button>
+        </div>
+
+        <div id="status-message">請點擊按鈕開始說話</div> <div id="chat-area">
+            <div class="message agent-message" style="--animation-order: 0;">您好！我是東森購物智能客服，請點擊按鈕開始說話。</div>
+        </div>
+
+    </div>
+
+    <!-- <p class="info-text">
+        ** 提示: 語音辨識功能依賴瀏覽器相容性。語音回應用於 Amazon Polly (可能會產生費用)。**<br>
+        後端處理 Bedrock Agent 呼叫和 Polly 語音合成。
+    </p> -->
+
+
+    <script>
+        const voiceButton = document.getElementById('voice-button');
+        const statusMessage = document.getElementById('status-message');
+        const chatArea = document.getElementById('chat-area');
+
+        let recognition; // Web Speech API SpeechRecognition 物件
+        let isRecording = false;
+
+        // 用於識別會話，每次頁面載入生成
+        const clientId = localStorage.getItem('bedrockAgentClientId') || 'client-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('bedrockAgentClientId', clientId);
+        console.log("Client ID:", clientId);
+
+
+        // 初始化 SpeechRecognition (語音辨識 STT)
+        if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+            recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.continuous = false; // 只獲取一句話
+            recognition.interimResults = false; // 只返回最終結果
+            recognition.lang = 'zh-TW'; // 設定語言
+
+            // --- 語音辨識事件處理器 ---
+
+            recognition.onstart = function() {
+                console.log('語音辨識已開始');
+                statusMessage.textContent = '請說話...';
+                voiceButton.classList.add('recording');
+                voiceButton.textContent = '錄音中...';
+            };
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                console.log('辨識結果:', transcript);
+                 // 如果辨識結果是空的或只有空白，不發送
+                if (!transcript || transcript.trim() === '') {
+                     statusMessage.textContent = '未偵測到語音或內容。';
+                     console.warn('辨識結果為空，不發送。');
+                     // 結束後將狀態改回待命
+                      setTimeout(() => {
+                         if (!isRecording && statusMessage.textContent === '未偵測到語音或內容。') {
+                            statusMessage.textContent = '請點擊按鈕開始說話';
+                         }
+                      }, 1500); // 1.5 秒後
+                     return;
+                }
+                statusMessage.textContent = '辨識完成，正在處理...';
+                // 將辨識結果發送到後端
+                sendTextToBackend(transcript);
+            };
+
+            recognition.onerror = function(event) {
+                console.error('語音辨識錯誤:', event.error);
+                 let errorMessage = '語音辨識發生錯誤。';
+                if (event.error === 'not-allowed') {
+                    errorMessage = '請允許瀏覽器使用麥克風權限。';
+                } else if (event.error === 'no-speech') {
+                     errorMessage = '未偵測到語音。';
+                } else if (event.error === 'denied') {
+                     errorMessage = '麥克風權限已被拒絕。';
+                } else if (event.error === 'audio-capture') {
+                     errorMessage = '無法獲取麥克風音訊。';
+                } else if (event.error === 'network') {
+                     errorMessage = '語音辨識網路錯誤。';
+                }
+                statusMessage.textContent = errorMessage;
+                voiceButton.classList.remove('recording');
+                voiceButton.textContent = '點擊說話';
+                isRecording = false; // 重設錄音狀態
+
+                 // 錯誤後將狀態改回待命
+                 setTimeout(() => {
+                     if (!isRecording && (statusMessage.textContent === errorMessage)) {
+                        statusMessage.textContent = '請點擊按鈕開始說話';
+                     }
+                  }, 3000); // 3 秒後
+            };
+
+            recognition.onend = function() {
+                 console.log('語音辨識已結束');
+                 // onresult 或 onerror 會處理狀態訊息的改變
+                 // 如果 end 時狀態還是 '請說話...'，說明沒有結果也沒有錯誤，通常是太短或無聲
+                  if (statusMessage.textContent === '請說話...') {
+                     statusMessage.textContent = '語音輸入結束。未辨識到內容。';
+                     setTimeout(() => {
+                         if (!isRecording && statusMessage.textContent === '語音輸入結束。未辨識到內容。') {
+                            statusMessage.textContent = '請點擊按鈕開始說話';
+                         }
+                     }, 2000); // 2 秒後
+                 }
+
+
+                 voiceButton.classList.remove('recording');
+                 voiceButton.textContent = '點擊說話';
+                 isRecording = false; // 重設錄音狀態
+            };
+
+        } else {
+            // 瀏覽器不支援語音辨識
+            statusMessage.textContent = '您的瀏覽器不支援語音辨識功能。請使用支援此功能的瀏覽器 (如 Chrome)。';
+            voiceButton.disabled = true; // 禁用按鈕
+            console.warn('瀏覽器不支援 Web Speech API (Recognition)');
+        }
+
+        // --- 事件監聽器 ---
+
+        voiceButton.addEventListener('click', function() {
+            if (!recognition || voiceButton.disabled) { // 如果按鈕被禁用，則不執行
+                 console.warn("語音辨識功能不可用或按鈕被禁用");
+                 return;
+            }
+
+            if (isRecording) {
+                // 如果正在錄音，點擊按鈕停止錄音
+                recognition.stop();
+                 console.log("手動停止錄音");
+            } else {
+                // 如果未錄音，點擊按鈕開始錄音
+                // 開始新的辨識前，停止任何正在播放的音訊
+                stopAudioPlayback();
+                try {
+                    recognition.start();
+                     isRecording = true;
+                     statusMessage.textContent = '請說話...'; // 點擊後立即更新狀態
+                } catch (error) {
+                    console.error("啟動語音辨識失敗:", error);
+                    statusMessage.textContent = '無法啟動語音辨識，請檢查麥克風。';
+                    voiceButton.classList.remove('recording');
+                    voiceButton.textContent = '點擊說話';
+                     isRecording = false;
+                }
+            }
+        });
+
+
+        // --- 輔助函數 ---
+
+        function sendTextToBackend(text) {
+            statusMessage.textContent = '正在發送訊息給客服...';
+            // 顯示使用者訊息在聊天區域
+            appendMessage(text, 'user-message');
+
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ text: text, clientId: clientId }) // 發送辨識到的文字和 client ID
+            })
+            .then(response => {
+                if (!response.ok) {
+                    // 如果 HTTP 狀態碼不是 2xx，嘗試解析錯誤信息並拋出
+                    return response.json().then(err => {
+                        throw new Error(`後端 HTTP 錯誤 ${response.status}: ${err.error || '未知錯誤'}`);
+                    }).catch(() => {
+                         // 如果無法解析 JSON 錯誤信息
+                         throw new Error(`後端 HTTP 錯誤 ${response.status}: 無法獲取詳細錯誤`);
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                const agentResponseText = data.agentResponse || '客服未能提供回應。';
+                const agentAudioBase64 = data.audio; // 從後端獲取 Base64 編碼的音訊
+
+                console.log('收到客服回應文字:', agentResponseText);
+                console.log('收到客服回應音訊:', agentAudioBase64 ? '有數據' : '無數據');
+
+                 // 檢查 Bedrock Agent 是否返回了錯誤信息 (例如憑證問題)
+                if (agentResponseText.startsWith("調用 Bedrock Agent 時發生錯誤:") || agentResponseText.startsWith("系統錯誤：") || agentResponseText.startsWith("後端服務錯誤：")) {
+                     statusMessage.textContent = '客服系統錯誤。';
+                     // 顯示錯誤文字
+                     appendMessage(agentResponseText, 'agent-message');
+                     // 錯誤後將狀態改回待命
+                     setTimeout(() => {
+                         if (!isRecording && statusMessage.textContent === '客服系統錯誤。') {
+                            statusMessage.textContent = '請點擊按鈕開始說話';
+                         }
+                      }, 3000); // 3 秒後
+
+                } else {
+                     statusMessage.textContent = '收到回應。';
+                     // 顯示正常的客服文字回應
+                     appendMessage(agentResponseText, 'agent-message');
+
+                     // === 播放後端傳來的音訊 ===
+                    if (agentAudioBase64) {
+                         playBase64Audio(agentAudioBase64, 'mp3'); // 假設後端返回的是 mp3 格式
+                    } else {
+                         console.warn("後端沒有返回音訊數據。");
+                         // 如果沒有音訊，等幾秒後將狀態訊息改回待命
+                         setTimeout(() => {
+                             if (!isRecording && statusMessage.textContent === '收到回應。') {
+                                statusMessage.textContent = '請點擊按鈕開始說話';
+                            }
+                         }, 2000); // 等待 2 秒
+                    }
+                }
+            })
+            .catch((error) => {
+                console.error('發送訊息到後端或處理回應時發生錯誤:', error);
+                 statusMessage.textContent = '通訊錯誤。';
+                 // 顯示錯誤訊息
+                 appendMessage('系統錯誤：無法連接客服或處理請求。詳細：' + error.message, 'agent-message');
+                  // 錯誤後將狀態改回待命
+                 setTimeout(() => {
+                     if (!isRecording && statusMessage.textContent === '通訊錯誤。') {
+                        statusMessage.textContent = '請點擊按鈕開始說話';
+                    }
+                 }, 3000); // 3 秒後
+            });
+        }
+
+        function appendMessage(text, type) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', type);
+             // 移除可能的冗餘前綴，前端自己加
+            const cleanText = text.replace(/^您:\s*/, '').replace(/^客服:\s*/, '').replace(/^Agent:\s*/, '').replace(/^系統:\s*/, '').replace(/^調用 Bedrock Agent 時發生錯誤:\s*/, '').replace(/^後端服務錯誤:\s*/, '');
+
+            messageDiv.textContent = `${type === 'user-message' ? '您' : '客服'}: ${cleanText}`; // 加上前綴
+            chatArea.appendChild(messageDiv);
+
+            // 設置一個 CSS 變數來控制動畫延遲，讓訊息一個接一個淡入
+            messageDiv.style.setProperty('--animation-order', chatArea.children.length - 1);
+
+            // 捲動到最底部
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // --- 處理和播放 Base64 音訊 ---
+        let currentAudio = null; // 用於追蹤當前播放的 Audio 物件
+
+        function playBase64Audio(base64, format) {
+            stopAudioPlayback(); // 播放新的音訊前先停止舊的
+
+            const audio = new Audio();
+            // 創建 Data URL
+            audio.src = `data:audio/${format};base64,${base64}`;
+
+            // 播放結束或出錯時的處理
+            audio.onended = function() {
+                console.log('音訊播放結束');
+                 // 播放結束後，如果沒有在錄音，且狀態不是「請說話...」或正在處理中，則改回待命狀態
+                 // 確保不打斷後續的語音辨識流程
+                 if (!isRecording && (statusMessage.textContent === '收到回應。' || statusMessage.textContent.startsWith('與後端通訊失敗'))) {
+                     statusMessage.textContent = '請點擊按鈕開始說話';
+                  }
+                currentAudio = null; // 釋放 Audio 物件
+            };
+
+            audio.onerror = function() {
+                 console.error('音訊播放錯誤');
+                  if (!isRecording && (statusMessage.textContent === '收到回應。' || statusMessage.textContent.startsWith('與後端通訊失敗'))) {
+                     statusMessage.textContent = '請點擊按鈕開始說話';
+                  }
+                 currentAudio = null; // 釋放 Audio 物件
+            };
+
+            // 開始播放
+            audio.play().then(() => {
+                console.log('音訊開始播放');
+                currentAudio = audio; // 記錄當前正在播放的 Audio 物件
+                 // 可以在這裡顯示「客服正在說話...」的狀態，但要小心狀態管理
+            }).catch(error => {
+                console.error('播放音訊失敗:', error);
+                 if (!isRecording && (statusMessage.textContent === '收到回應。' || statusMessage.textContent.startsWith('與後端通訊失敗'))) {
+                     statusMessage.textContent = '請點擊按鈕開始說話';
+                  }
+                 currentAudio = null; // 釋放 Audio 物件
+            });
+        }
+
+        function stopAudioPlayback() {
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0; // 重置播放位置
+                currentAudio = null;
+                 console.log('音訊播放已停止');
+            }
+             // 如果停止播放時沒有在錄音，並且狀態不是「請說話...」或正在處理中，則改回待命狀態
+              if (!isRecording && (statusMessage.textContent === '收到回應。' || statusMessage.textContent.startsWith('與後端通訊失敗'))) {
+                 statusMessage.textContent = '請點擊按鈕開始說話';
+              }
+        }
+
+        // ===============================
+
+
+         // 頁面載入後，確保狀態訊息正確
+        window.onload = function() {
+             if (recognition) {
+                statusMessage.textContent = '請點擊按鈕開始說話';
+             } else {
+                 statusMessage.textContent = '您的瀏覽器不支援語音辨識功能。';
+             }
+             // 確保初始的客服訊息顯示正確
+              const initialMessage = chatArea.querySelector('.agent-message');
+              if(initialMessage) {
+                 initialMessage.style.opacity = 1; // 讓初始訊息立即顯示
+              }
+        };
+
+
+    </script>
+
+</body>
+</html>
